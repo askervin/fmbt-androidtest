@@ -1,0 +1,145 @@
+# preview-image-path: bitmaps/nexus-s
+# preview-show-vars: calls
+# preview-depth: 10
+
+aal "android_phone" {
+    language: python {
+        import fmbt
+        import fmbtandroid
+    }
+
+    variables {
+        fg_app, phone_view, calls
+    }
+
+    initial_state {
+        fg_app = "homescreen"
+        phone_view = "dialer"
+        calls = []
+    }
+
+    adapter_init {
+        fmbtandroid._OCRPREPROCESS=[fmbtandroid._OCRPREPROCESS[0]]
+
+        # Define global "d" to refer to the device
+        global d
+        d = fmbtandroid.Device()
+        d.bitmapPath = "bitmaps/nexus-s"
+        d.enableVisualLog("devicelog.html", timeFormat="%T.%f")
+
+        # If the device is in lockscreen, unlock it.
+        time.sleep(2)
+        d.refreshScreenshot()
+
+        if d.verifyBitmap("lockscreen-lock.png"):
+            d.swipeBitmap("lockscreen-lock.png", "e")
+            time.sleep(.5)
+            d.pressHome()
+            time.sleep(1)
+            d.refreshScreenshot()
+    }
+
+    adapter_exit {
+        d.close()
+    }
+
+    tag "homescreen" {
+        guard() { return fg_app == "homescreen" }
+        adapter() {
+            assert d.waitBitmap("home-dialer.png"), "not in home screen"
+        }
+
+        input "launch phone" {
+            adapter() {
+                d.tapBitmap("home-dialer.png")
+                d.refreshScreenshot()
+            }
+            body() {
+                fg_app = "phone"
+                if calls: phone_view = "use-return-add"
+                else: phone_view = "dialer"
+            }
+        }
+    }
+
+    tag "phone" {
+        guard() { return fg_app == "phone" }
+        adapter() {
+            if phone_view == "use-return-add":
+                assert d.waitOcrText("Return", preprocess="")
+                assert d.waitOcrText("Add", preprocess="")
+            elif phone_view == "dialer":
+                assert d.waitBitmap("dialer-numpad.png")
+            elif phone_view == "call":
+                assert d.waitBitmap("dialer-newcall.png", waitTime=1) or d.waitBitmap("dialer-mergecall.png", waitTime=1)
+        }
+
+        input "return to call in progress" {
+            guard() { return phone_view == "use-return-add" }
+            adapter() {
+                assert d.tapOcrText("Return", preprocess="")
+            }
+            body() { phone_view = "call" }
+        }
+
+        input "call 333", "call 999" {
+            guard() {
+                return (phone_view in ["dialer", "use-return-add", "call"] and
+                    action_name.split()[1] not in calls)
+            }
+            adapter() {
+                if action_name.split()[1] == "333": tapPos = (1.0, 0.0)
+                else: tapPos = (1.0, 0.6)
+
+                if phone_view == "use-return-add":
+                    assert d.waitOcrText("Add", preprocess="") and d.tapOcrText("Add", preprocess="")
+                elif phone_view == "call":
+                    assert d.tapBitmap("dialer-newcall.png")
+
+                assert d.waitBitmap("dialer-numpad.png")
+
+                # dial number
+                for i in xrange(3):
+                    d.tapBitmap("dialer-numpad.png", tapPos=tapPos)
+                    time.sleep(.4)
+
+                # tap the call bar at the bottom of the screen
+                d.tap((.5, .9))
+                time.sleep(1)
+                d.waitBitmap("dialer-hangup.png")
+            }
+            body() {
+                calls.append(action_name.split()[1])
+                phone_view = "call"
+            }
+        }
+    } # end of tag "phone"
+
+    input "return to homescreen" {
+        guard() { return fg_app != "homescreen" }
+        adapter() { d.pressHome() }
+        body() { fg_app = "homescreen" }
+    }
+
+    input "hangup 333", "hangup 999" {
+        guard() {
+            return (calls and action_name.split()[1] == calls[-1] and
+                (fg_app == "homescreen" or fg_app == "phone" and phone_view == "call"))
+            }
+        adapter() {
+            if fg_app == "homescreen":
+                d.swipe((.5, 0.0), "s")
+                assert d.waitOcrText(calls[-1], preprocess="")
+                assert d.tapOcrText("Hang")
+                if len(calls) > 1:
+                    # prev. call in hold should have been activated
+                    assert d.waitOcrText(calls[-2], preprocess="")
+                    d.pressHome()
+                return
+            assert d.tapBitmap("dialer-hangup.png")
+        }
+        body() {
+            calls.remove(action_name.split()[1])
+        }
+    }
+}
