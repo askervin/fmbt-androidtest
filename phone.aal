@@ -1,0 +1,214 @@
+# phone.aal is a model & adapter defined in AAL/Python.
+# fMBT automatically generates and executes tests against
+# the Android Phone application, using inputs and state
+# verifications (tags) defined in this file.
+
+# Author: antti.kervinen@intel.com
+
+# preview-image-path: bitmaps/nexus-s
+# preview-show-vars: calls
+# preview-depth: 10
+
+aal "android_phone" {
+    language "python" {
+        import fmbtandroid
+        import time
+
+        def waitTransition():
+            time.sleep(.75)
+    }
+
+    variables { fg_app, phone_view, calls }
+
+    initial_state {
+        # The "state" of the model is a unique combination of
+        # values of the variables defined above.
+
+        # fg_app is the foreground application, "homescreen" or "phone"
+        fg_app = "homescreen"
+
+        # phone_view values and meanings
+        # ------------------------------
+        # "dialer"          the numpad view in which you can dial.
+        # "use-return-add"  the view you get when launching the phone
+        #                   and there is already a call in progress.
+        # "call"            the active call view with the big red
+        #                   hang-up button at the bottom of the view.
+        phone_view = "dialer"
+
+        # calls is a list of string, "333", or "999".
+        # The last item is the active call.
+        calls = []
+    }
+
+    adapter_init {
+        # Global variable "d" is the Device instance connected
+        # to the emulator.
+        global d
+        d = fmbtandroid.Device()
+        d.bitmapPath = "bitmaps/nexus-s"
+        d.enableVisualLog("devicelog.html", timeFormat="%T.%f")
+
+        time.sleep(2)
+        d.refreshScreenshot()
+
+        # If the device is in lockscreen, unlock it.
+        if d.verifyBitmap("lockscreen-lock.png"):
+            d.swipeBitmap("lockscreen-lock.png", "e")
+            waitTransition()
+            d.pressHome()
+            waitTransition()
+            d.refreshScreenshot()
+    }
+
+    adapter_exit {
+        d.close()
+    }
+
+    tag "homescreen" {
+        # Tags are associated to states where the guard returns True.
+        guard() { return fg_app == "homescreen" }
+        # Tagged states are verified when entered by executing
+        # adapter blocks of all tags in the state.
+        adapter() {
+            assert d.waitBitmap("home-dialer.png"), "not in home screen"
+        }
+
+        input "launch phone" {
+            # A test step (like "launch phone") can be tested when
+            # its guards and guards of outer blocks (like "homescreen")
+            # return True. If a guard block is not defined, the default
+            # for it is "return True". That is, "launch phone" can be
+            # tested whenever in a state with the "homescreen" tag.
+            adapter() {
+                # The adapter block executes the test step. In this case,
+                # it gives input "launch phone" to the device.
+                d.tapBitmap("home-dialer.png")
+                # Instead of only tapping the dialer icon at the
+                # homescreen, this adapter continues to the state where
+                # the device is ready for next state verification. That
+                # is, wait for a while and update the screenshot after
+                # that. This design is used in all adapter blocks in
+                # this example.
+                waitTransition()
+                d.refreshScreenshot()
+            }
+            body() {
+                # If the adapter block has been successfully executed
+                # (no exceptions, not returning False or observed actions),
+                # the state of the model is changed by the body block.
+                fg_app = "phone"
+                if len(calls) > 0:
+                    phone_view = "use-return-add"
+                else:
+                    phone_view = "dialer"
+            }
+        }
+    }
+
+    tag "phone" {
+        guard() { return fg_app == "phone" }
+        adapter() {
+            if phone_view == "use-return-add":
+                assert d.waitOcrText("Return", preprocess="")
+                assert d.waitOcrText("Add", preprocess="")
+            elif phone_view == "dialer":
+                assert d.waitBitmap("dialer-numpad.png")
+            elif phone_view == "call":
+                assert d.waitOcrText(calls[-1], area=(0,0,.5,.2))
+                if len(calls) == 1:
+                    assert d.waitBitmap("dialer-newcall.png", waitTime=1)
+                else:
+                    assert d.waitBitmap("dialer-mergecall.png", waitTime=1)
+        }
+
+        input "call 333", "call 999" {
+            guard() {
+                return (phone_view in ["dialer", "use-return-add", "call"] and
+                    action_name.split()[1] not in calls)
+            }
+            adapter() {
+                if action_name.split()[1] == "333": tapPos = (1.0, 0.0)
+                else: tapPos = (1.0, 0.6)
+
+                if phone_view == "use-return-add":
+                    assert d.waitOcrText("Add", preprocess="") and d.tapOcrText("Add", preprocess="")
+                elif phone_view == "call":
+                    assert d.tapBitmap("dialer-newcall.png")
+
+                assert d.waitBitmap("dialer-numpad.png")
+
+                # dial number
+                for i in xrange(3):
+                    d.tapBitmap("dialer-numpad.png", tapPos=tapPos)
+                    waitTransition()
+
+                # tap the call bar at the bottom of the screen
+                d.tap((.5, .9))
+                waitTransition()
+                d.waitBitmap("dialer-hangup.png")
+            }
+            body() {
+                calls.append(action_name.split()[1])
+                phone_view = "call"
+            }
+        }
+
+        input "return to call in progress" {
+            guard() { return phone_view == "use-return-add" }
+            adapter() {
+                assert d.tapOcrText("Return", preprocess="")
+                waitTransition()
+                d.refreshScreenshot()
+            }
+            body() { phone_view = "call" }
+        }
+
+        input "swap calls" {
+            guard() { return len(calls) == 2 and phone_view == "call" }
+            adapter() {
+                d.tap((.7,.95))
+                waitTransition()
+                d.refreshScreenshot()
+            }
+            body() { calls.reverse() }
+        }
+
+    } # end of tag "phone"
+
+    input "return to homescreen" {
+        guard() { return fg_app != "homescreen" }
+        adapter() {
+            d.pressHome()
+            waitTransition()
+            d.refreshScreenshot()
+        }
+        body() { fg_app = "homescreen" }
+    }
+
+    input "hangup 333", "hangup 999" {
+        guard() {
+            return (calls and action_name.split()[1] == calls[-1] and
+                (fg_app == "homescreen" or fg_app == "phone" and phone_view == "call"))
+            }
+        adapter() {
+            if fg_app == "homescreen":
+                d.swipe((.5, 0.0), "s")
+                assert d.waitOcrText(calls[-1], preprocess="")
+                assert d.tapOcrText("Hang")
+                if len(calls) > 1:
+                    # prev. call in hold should have been activated
+                    assert d.waitOcrText(calls[-2], preprocess="")
+                    d.pressHome()
+                return
+            assert d.tapBitmap("dialer-hangup.png")
+            waitTransition()
+            d.refreshScreenshot()
+        }
+        body() {
+            calls.remove(action_name.split()[1])
+            if len(calls) == 0:
+                phone_view = "dialer"
+        }
+    }
+}
