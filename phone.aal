@@ -9,6 +9,12 @@
 # preview-show-vars: calls
 # preview-depth: 10
 
+# If you open this file with fmbt-scripter, it will
+# run following lines:
+# scripter-connect: import fmbtandroid
+# scripter-connect: d = fmbtandroid.Device()
+# scripter-connect: d.setBitmapPath("bitmaps/nexus-s")
+
 aal "android_phone" {
     language "python" {
         import fmbtandroid
@@ -46,7 +52,7 @@ aal "android_phone" {
         # to the emulator.
         global d
         d = fmbtandroid.Device()
-        d.bitmapPath = "bitmaps/nexus-s"
+        d.setBitmapPath("bitmaps/nexus-s")
         d.enableVisualLog("devicelog.html", timeFormat="%T.%f")
 
         time.sleep(2)
@@ -195,6 +201,7 @@ aal "android_phone" {
             if fg_app == "homescreen":
                 d.swipe((.5, 0.0), "s")
                 assert d.waitOcrText(calls[-1], preprocess="")
+                assert d.waitOcrText("Hang up", preprocess="")
                 assert d.tapOcrText("Hang")
                 if len(calls) > 1:
                     # prev. call in hold should have been activated
